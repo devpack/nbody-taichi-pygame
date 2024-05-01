@@ -6,6 +6,8 @@ Leapfrog / Verlet integration has been used for its energy conservation property
 
 ----
 
+Dependencies: taichi, pygame-ce, PyGLM, moderngl, numpy, imgui[pygame] (python3 -m pip install -r requirements.txt).
+
 Usage:
 
 ```

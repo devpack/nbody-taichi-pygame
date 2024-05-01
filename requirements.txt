@@ -1,0 +1,6 @@
+taichi
+pygame-ce
+PyGLM
+moderngl
+numpy
+imgui[pygame]
