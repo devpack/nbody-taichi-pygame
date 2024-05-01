@@ -1,6 +1,6 @@
 # nbody-taichi-pygame
 
-Python-Taichi version of the nbody problem. Taichi is used for the N² computation (no BH tree used) and PyGame handles the draw calls into a regular pygame surface (3D is done by hand for the matrix fun), then this surface is then converted into a texture which is rendered in a quad (ModernGL window) by the fragment shader. Options can be adjusted on the fly using Dear Imgui bindings.
+Python-Taichi version of the nbody problem. Taichi is used for the N² computation (no BH tree used) and PyGame handles the draw calls into a regular pygame surface (3D is done by hand for the matrix fun), then this surface is converted into a texture which is rendered in a quad (ModernGL window) by the fragment shader. Options can be adjusted on the fly using Dear Imgui bindings.
 
 Leapfrog / Verlet integration has been used for its energy conservation property.
 
