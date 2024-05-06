@@ -1,5 +1,5 @@
 import sys, argparse, time, math, glm, random
-from utils import FPSCounter, ShaderProgram, Camera
+from utils import FPSCounter, ShaderProgram, Camera, ScreenRecorder
 from body_taichi import NBodySystem
 
 import taichi as ti
@@ -7,7 +7,7 @@ import taichi as ti
 import numpy as np
 import moderngl as mgl
 
-import pygame
+import pygame, collections
 
 import imgui
 import my_imgui.pygame_imgui as pygame_imgui
@@ -16,12 +16,20 @@ import my_imgui.pygame_imgui as pygame_imgui
 
 class App:
 
-    def __init__(self, screen_width=1600, screen_height=1200, use_opengl=True, max_fps=-1, nb_body=8, dt=0.005, eps=0.5):
+    def __init__(self, screen_width=1280, screen_height=800, use_opengl=True, record_video="", video_fps=60, max_fps=-1, nb_body=8, dt=0.005, eps=0.5):
 
         # screen
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.use_opengl = use_opengl
+        self.record_video = record_video
+        self.video_fps = video_fps
+
+        if self.record_video:
+            if self.record_video in ("XVID", "h264", "avc1", "mp4v"):
+                self.video_recorder = ScreenRecorder(self.screen_width, self.screen_height, self.video_fps, codec=self.record_video)
+            else:
+                self.video_recorder = ScreenRecorder(self.screen_width, self.screen_height, self.video_fps)
 
         # FPS
         self.lastTime = time.time()
@@ -30,15 +38,26 @@ class App:
         self.max_fps = max_fps
         self.clock = pygame.time.Clock()
         self.delta_time = 0
+        self.frames = 0
 
         # bodies
         self.nb_body = nb_body
+        self.field_size = 16
         self.dt = dt
         self.eps = eps
-
         self.p1_mass = 1.0
-        self.nbody_system = NBodySystem(p1_mass=self.p1_mass, p2_mass=1.0, p3_mass=1.0, px_mass=1.0, nb_body=self.nb_body)
+        self.trace_lenght = 500
+        self.point_size = 1
+
+        self.trace_deque = collections.deque(maxlen=self.trace_lenght*3)
+
+        self.nbody_system = NBodySystem(p1_mass=self.p1_mass, p2_mass=1.0, p3_mass=1.0, px_mass=1.0, nb_body=self.nb_body, field_size=self.field_size)
         self.nbody_system.init_bodies()
+        #self.nbody_system.init_bodies_2()
+
+        #self.field_points = self.get_field(min=-1.0, max=1.0, ppl=self.field_size)
+        #self.nbody_system.init_field( np.array( self.get_field(min=-1.0, max=1.0, ppl=self.field_size) ) )
+        #print(self.nbody_system.field_points)
 
         self.cube = [(-1.0, 1.0, 1.0), (1.0, 1.0, 1.0), (1.0, -1.0, 1.0), (-1.0, -1.0, 1.0), (-1.0, 1.0, -1.0), (1.0, 1.0, -1.0), (1.0, -1.0, -1.0), (-1.0, -1.0, -1.0)]
 
@@ -47,14 +66,14 @@ class App:
         self.clear = True
         self.show_cube = True
         
-        self.cols = [(255,200,155), (155,255,200), (200,155,255), (255,155,155)]
+        self.cols = [(255, 196, 128), (128, 255, 196), (196, 128, 255)]
         while len(self.cols) < self.nb_body:
             self.cols.append((random.randint(64, 255), random.randint(128, 255), random.randint(196, 255)))
 
         # camera
         self.cam_speed = 0.01
         self.cam_fov = 45.
-        self.camera = Camera(self, fov=self.cam_fov, near=0.01, far=100., position=(0, 0, 3), speed=self.cam_speed, sensivity=0.07)
+        self.camera = Camera(self, fov=self.cam_fov, near=0.01, far=100., position=(0, 0, 4), speed=self.cam_speed, sensivity=0.07)
 
         pygame.event.set_grab(False)
         pygame.mouse.set_visible(True)
@@ -65,8 +84,6 @@ class App:
         self.left = False
         self.up = False
         self.down = False
-        self.zoom_less = False
-        self.zoom_more = False
         self.mouse_x, self.mouse_y = 0, 0
         self.mouse_button_down = False
 
@@ -134,7 +151,8 @@ class App:
 
             fps = f"FPS: {self.fps.get_fps():3.0f} ({gl_mode})"
             cam_pos = f"CamPos: {int(self.camera.position.x)}, {int(self.camera.position.y)}, {int(self.camera.position.z)}"
-            pygame.display.set_caption(fps + " | " + cam_pos)
+            ft = "frames=%s" % str(self.frames)
+            pygame.display.set_caption(fps + " | " + cam_pos + " | " + ft)
 
             self.lastTime = self.currentTime
 
@@ -148,19 +166,35 @@ class App:
         _, self.paused = imgui.checkbox("Pause (P key)", self.paused)
         _, self.clear = imgui.checkbox("Clear (C key)", self.clear)
 
+        _, self.point_size  = imgui.slider_int("point size", self.point_size, 1, 8)
+
+        _, self.trace_lenght  = imgui.slider_int("trace lenght", self.trace_lenght, 1, 3000)
+        self.trace_deque = collections.deque(self.trace_deque, maxlen=self.trace_lenght*3)
+
         _, self.p1_mass  = imgui.slider_float("P1 mass", self.p1_mass, 0.01, 100.)
         self.nbody_system.bodies[0].mass = self.p1_mass
 
         _, self.dt  = imgui.slider_float("dt", self.dt, 0.00005, 0.01, format="%.5f")
         _, self.eps = imgui.slider_float("eps", self.eps, 0.01, 0.5)
-        _, self.cam_speed = imgui.slider_float("cam_speed", self.cam_speed, 0.001, 1.0, format="%.3f")
-        _, self.cam_fov = imgui.slider_float("cam_fov", self.cam_fov, 1.0, 90.0)
+        _, self.cam_speed = imgui.slider_float("cam speed", self.cam_speed, 0.001, 1.0, format="%.3f")
+        _, self.cam_fov = imgui.slider_float("cam fov", self.cam_fov, 1.0, 90.0)
 
         self.camera.speed = self.cam_speed
         self.camera.fov = self.cam_fov
 
         imgui.end()
 
+    def get_field(self, min=-1., max=1., ppl=100):
+        field_pts = []
+        for y in np.linspace(max, min, num=ppl):
+            for x in np.linspace(min, max, num=ppl):
+                field_pts.append((x,y, 0))
+
+        #x = np.array(field_pts)
+        #print(x)
+
+        return field_pts
+    
     def run(self):
 
         while True:
@@ -168,13 +202,12 @@ class App:
             if self.clear:
                 self.screen.fill((0,0,0))
 
-            self.zoom_more = False
-            self.zoom_less = False
-
             # pygame events
             for event in pygame.event.get():
 
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                    if self.record_video:
+                        self.video_recorder.end_recording()
                     pygame.quit()
                     sys.exit()
 
@@ -197,7 +230,7 @@ class App:
                         self.up = True
                     if event.key == pygame.K_LSHIFT:
                         self.down = True
-                    
+
                 if event.type == pygame.KEYUP:
                     if event.key == pygame.K_UP:
                         self.forward = False
@@ -211,11 +244,6 @@ class App:
                         self.up = False
                     if event.key == pygame.K_LSHIFT:
                         self.down = False
-
-                    if event.key == pygame.K_q:
-                        self.zoom_more = True
-                    if event.key == pygame.K_w:
-                        self.zoom_less = True
 
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     self.mouse_button_down = True
@@ -248,26 +276,20 @@ class App:
                 self.mouse_x = 0
                 self.mouse_y = 0
                 self.mouse_dx, self.mouse_dy = 0, 0
-                
-            # body point size
-            if self.clear:
-                point_size = 8
-            else:
-                point_size = 1
 
-            # particules positions
+            # calc particules positions
             if not self.paused:
                 self.nbody_system.update(self.dt, self.eps)
 
             # camera motion
-            self.camera.update(self.mouse_dx, self.mouse_dy, self.forward, self.backward, self.left, self.right, self.up, self.down, self.zoom_less, self.zoom_more)
+            self.camera.update(self.mouse_dx, self.mouse_dy, self.forward, self.backward, self.left, self.right, self.up, self.down)
        
             # move and put obj into our world
             self.obj_rot   = glm.vec3([glm.radians(a) for a in (0, 0, 0)])
             self.obj_scale = (1, 1, 1) # same size
             self.obj_pos   = (0, 0, 0) # into to center of our world
 
-            # first do scaling operations, then rotations and lastly translations when combining matrices
+            # model mat4x4
             self.m_model = glm.mat4()
             self.m_model = glm.translate(self.m_model, self.obj_pos)
             self.m_model = glm.rotate(self.m_model, self.obj_rot.z, glm.vec3(0, 0, 1))
@@ -275,6 +297,7 @@ class App:
             self.m_model = glm.rotate(self.m_model, self.obj_rot.x, glm.vec3(1, 0, 0))
             self.m_model = glm.scale (self.m_model, self.obj_scale)
 
+            # cube
             if self.show_cube:
 
                 cube_points = []
@@ -307,8 +330,7 @@ class App:
                 pygame.draw.line(self.screen, col, cube_points[2], cube_points[6], width=1)
                 pygame.draw.line(self.screen, col, cube_points[3], cube_points[7], width=1)
 
-            # Particules
-            bodies = []
+            # particules world positions
             for i in range(self.nb_body):
                 
                 x_ndc = self.nbody_system.bodies[i].pos.x
@@ -318,14 +340,61 @@ class App:
                 ndc_hmg_vec4 = glm.vec4(x_ndc, y_ndc, z_ndc, 1.0)
                 pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * ndc_hmg_vec4
 
-                x_proj = (self.screen_width/2) +  (pt_proj_vec4.x/pt_proj_vec4.z)*(self.screen_width/2)
-                y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.z)*(self.screen_height/2)
+                x_proj = (self.screen_width/2) + (pt_proj_vec4.x/pt_proj_vec4.w)*(self.screen_width/2)
+                y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.w)*(self.screen_height/2)
 
-                bodies.append( (int(x_proj), int(y_proj)) )
-                
+                self.trace_deque.append( (int(x_proj), int(y_proj)) )
+
             # render particules
-            for i, b in enumerate(bodies):
-                pygame.draw.circle(self.screen, self.cols[i], (b[0],  b[1]), point_size)
+            for i, body in enumerate(self.trace_deque):
+                col = self.cols[i%self.nb_body]
+
+                v = ( (i/3) / (float(len(self.trace_deque))/3) ) * 196
+                #r = 255 - max(0, min(255, col[0] - v))
+                #g = 255 - max(0, min(255, col[1] - v))
+                #b = 255 - max(0, min(255, col[2] - v))
+                #col=(r, g, b)
+                col = tuple(map(lambda x: 255 - max(0, min(255, x - v)), col))
+
+                pygame.draw.circle(self.screen, col, (body[0],  body[1]), self.point_size)
+
+            if 0:
+                f_points = []
+                for i in range(self.field_size*self.field_size):
+                    #x_ndc = self.nbody_system.field_points[i].pos.x
+                    #y_ndc = self.nbody_system.field_points[i].pos.y
+                    #z_ndc = self.nbody_system.field_points[i].pos.z
+                    
+                    x_ndc = self.field_points[i][0]
+                    y_ndc = self.field_points[i][1]
+                    z_ndc = self.field_points[i][2]
+
+                    col = []
+                    pmax = 5
+                    for i in range(self.nb_body):
+                        
+                        x_ndc_p = self.nbody_system.bodies[i].pos.x
+                        y_ndc_p = self.nbody_system.bodies[i].pos.y
+
+                        a = int(((math.pow((x_ndc_p - x_ndc), 2) + math.pow((y_ndc_p - y_ndc), 2) ) / pmax) * 255)
+                        #print(a)
+                        if a > 255:
+                            a = 255
+                        if a < 55:
+                            a = 55
+                        col.append(a)
+
+                    ndc_hmg_vec4 = glm.vec4(x_ndc, y_ndc, z_ndc, 1.0)
+                    pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * ndc_hmg_vec4
+
+                    x_proj = (self.screen_width/2) + (pt_proj_vec4.x/pt_proj_vec4.z)*(self.screen_width/2)
+                    y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.z)*(self.screen_height/2)
+
+                    f_points.append( (int(x_proj), int(y_proj), col) )
+
+                # render particules
+                for i, b in enumerate(f_points):
+                    pygame.draw.circle(self.screen, b[2], (b[0],  b[1]), 8)
 
             # opengl mode => write tour 2D pygame surface into the texture (which will be be rendered in a quad by the fragment shader)
             if self.use_opengl:
@@ -337,21 +406,26 @@ class App:
 
                 self.vao.render(mode=mgl.TRIANGLE_STRIP)
 
-                if self.use_opengl:
-                    self.show_options_ui()
-                    imgui.render()
-                    self.imgui_renderer.render(imgui.get_draw_data())
+                self.show_options_ui()
+                imgui.render()
+                self.imgui_renderer.render(imgui.get_draw_data())
                 
             # display
             pygame.display.flip()
 
+            # record video
+            if self.record_video:
+                self.video_recorder.capture_frame(self.display)
+
             # fps
             self.delta_time = self.clock.tick(self.max_fps)
             self.get_fps()
+            self.frames += 1
 
 # -----------------------------------------------------------------------------------------------------------
-# python3 main.py --arch=cpu --body=8 --fps=-1
-# python3 main.py --arch=vulkan --body=8 --fps=60
+# python3 main.py --arch=cpu --body=3 --fps=-1
+# python3 main.py --arch=gpu --body=10000 --fps=60
+# python3 main.py --arch=cpu --body=3 --fps=-1 -rv="h264" -vfps=240
 
 def main():
 
@@ -362,15 +436,14 @@ def main():
     # const
     USE_PROFILER  = 0
 
-    SCREEN_WIDTH  = 1280
-    SCREEN_HEIGHT = 800
-
     # args
     parser = argparse.ArgumentParser(description="Leapfrog N-Body")
 
     parser.add_argument('-a', '--arch', help='Taichi backend', default="cpu", action="store")
     parser.add_argument('-f', '--fps', help='Max FPS, -1 for unlimited', default=-1, type=int)
     parser.add_argument('-b', '--body', help='NB Body', default=3, type=int)
+    parser.add_argument('-rv', '--record_video', help='', default="", type=str)
+    parser.add_argument('-vfps', '--video_fps', help='', default=60, type=int)
 
     result = parser.parse_args()
     args = dict(result._get_kwargs())
@@ -388,8 +461,8 @@ def main():
         ti.init(ti.vulkan)
 
     # App
-    app = App(screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT, use_opengl=1, max_fps=args["fps"], 
-              nb_body=args["body"], dt=0.0005, eps=0.1)
+    app = App(screen_width=1280, screen_height=800, use_opengl=1, record_video=args["record_video"], video_fps=args["video_fps"], max_fps=args["fps"], 
+              nb_body=args["body"], dt=0.002, eps=0.1)
     app.run()
 
 if __name__ == "__main__":
