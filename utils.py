@@ -7,13 +7,17 @@ import pygame
 
 class Camera:
     
-    def __init__(self, app, fov=50, near=0.1, far=100, position=(0, 0, 4), speed=0.009, sensivity=0.07, yaw=-90, pitch=0, ortho=False):
+    def __init__(self, app, orbital_mode=False, orbital_speed=0.1, fov=50, near=0.1, far=100, position=(0, 0, 4), speed=0.009, sensivity=0.07, yaw=-90, pitch=0, ortho=False):
         self.app = app
+
+        self.orbital_mode = orbital_mode
+        self.orbital_speed = orbital_speed
 
         self.fov = fov 
         self.near = near 
         self.far = far 
         self.position = glm.vec3(position)
+        self.target = glm.vec3(0, 0, 0) # center of the world
         self.aspect_ratio = app.screen_width / app.screen_height
 
         self.speed = speed
@@ -21,7 +25,13 @@ class Camera:
 
         self.up = glm.vec3(0, 1, 0)
         self.right = glm.vec3(1, 0, 0)
-        self.forward = glm.vec3(0, 0, -1)
+        self.local_up = glm.vec3(0, 1, 0)
+
+        if self.orbital_mode:
+            self.forward = glm.normalize(self.target - self.position)
+        else:
+            self.forward = glm.vec3(0, 0, -1) # z front
+
         self.yaw = yaw
         self.pitch = pitch
 
@@ -34,15 +44,22 @@ class Camera:
         self.pitch = max(-89, min(89, self.pitch))
 
     def update_camera_vectors(self):
-        yaw, pitch = glm.radians(self.yaw), glm.radians(self.pitch)
 
-        self.forward.x = glm.cos(yaw) * glm.cos(pitch)
-        self.forward.y = glm.sin(pitch)
-        self.forward.z = glm.sin(yaw) * glm.cos(pitch)
+        if self.orbital_mode:
+            self.forward = glm.normalize(self.target - self.position)
+            self.right = glm.normalize(glm.cross(self.forward, glm.vec3(0, 1, 0)))
+            self.up = glm.normalize(glm.cross(self.right, self.forward))
 
-        self.forward = glm.normalize(self.forward)
-        self.right = glm.normalize(glm.cross(self.forward, glm.vec3(0, 1, 0)))
-        self.up = glm.normalize(glm.cross(self.right, self.forward))
+        else:
+            yaw, pitch = glm.radians(self.yaw), glm.radians(self.pitch)
+
+            self.forward.x = glm.cos(yaw) * glm.cos(pitch)
+            self.forward.y = glm.sin(pitch)
+            self.forward.z = glm.sin(yaw) * glm.cos(pitch)
+
+            self.forward = glm.normalize(self.forward)
+            self.right = glm.normalize(glm.cross(self.forward, glm.vec3(0, 1, 0)))
+            self.up = glm.normalize(glm.cross(self.right, self.forward))
 
     def update(self, mouse_dx, mouse_dy, forward, backward, left, right, up, down):
         self.move(forward, backward, left, right, up, down)
@@ -52,20 +69,35 @@ class Camera:
         self.m_view = self.get_view_matrix()
 
     def move(self, forward, backward, left, right, up, down):
-        velocity = self.speed * self.app.delta_time
 
-        if forward:
-            self.position += self.forward * velocity
-        if backward:
-            self.position -= self.forward * velocity
-        if right:
-            self.position += self.right * velocity
-        if left:
+        if self.orbital_mode:
+            velocity = self.speed * self.app.delta_time * self.orbital_speed
             self.position -= self.right * velocity
-        if up:
-            self.position -= self.up * velocity
-        if down:
-            self.position += self.up * velocity
+
+            if forward:
+                self.position += self.forward * velocity
+            if backward:
+                self.position -= self.forward * velocity
+            if up:
+                self.position -= self.up * velocity
+            if down:
+                self.position += self.up * velocity
+
+        else:
+            velocity = self.speed * self.app.delta_time
+
+            if forward:
+                self.position += self.forward * velocity
+            if backward:
+                self.position -= self.forward * velocity
+            if right:
+                self.position += self.right * velocity
+            if left:
+                self.position -= self.right * velocity
+            if up:
+                self.position -= self.up * velocity
+            if down:
+                self.position += self.up * velocity
 
         if self.fov < 1:
             self.fov = 1

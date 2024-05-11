@@ -16,7 +16,8 @@ import my_imgui.pygame_imgui as pygame_imgui
 
 class App:
 
-    def __init__(self, screen_width=1280, screen_height=800, use_opengl=True, record_video="", video_fps=60, max_fps=-1, nb_body=8, dt=0.005, eps=0.5):
+    def __init__(self, screen_width=1280, screen_height=800, use_opengl=True, orbital_mode=1, record_video="", video_fps=60, max_fps=-1, 
+                 nb_body=8, use_taichi_for_matrix=False, dt=0.005, eps=0.5):
 
         # screen
         self.screen_width = screen_width
@@ -24,6 +25,7 @@ class App:
         self.use_opengl = use_opengl
         self.record_video = record_video
         self.video_fps = video_fps
+        self.use_taichi_for_matrix = use_taichi_for_matrix
 
         if self.record_video:
             if self.record_video in ("XVID", "h264", "avc1", "mp4v"):
@@ -42,22 +44,22 @@ class App:
 
         # bodies
         self.nb_body = nb_body
-        self.field_size = 16
         self.dt = dt
         self.eps = eps
         self.p1_mass = 1.0
-        self.trace_lenght = 500
+        self.trace_lenght = 1000
         self.point_size = 1
 
-        self.trace_deque = collections.deque(maxlen=self.trace_lenght*3)
+        self.trace_deque = collections.deque(maxlen=self.trace_lenght*self.nb_body)
+        self.trace_proj = []
 
-        self.nbody_system = NBodySystem(p1_mass=self.p1_mass, p2_mass=1.0, p3_mass=1.0, px_mass=1.0, nb_body=self.nb_body, field_size=self.field_size)
+        self.nbody_system = NBodySystem(screen_width=self.screen_width, screen_height=self.screen_height, fov=45, near=0.01, far=100., 
+                                        p1_mass=self.p1_mass, p2_mass=1.0, p3_mass=1.0, px_mass=1.0, nb_body=self.nb_body)
         self.nbody_system.init_bodies()
+        #self.nbody_system.init_bodies_3()
         #self.nbody_system.init_bodies_2()
 
         #self.field_points = self.get_field(min=-1.0, max=1.0, ppl=self.field_size)
-        #self.nbody_system.init_field( np.array( self.get_field(min=-1.0, max=1.0, ppl=self.field_size) ) )
-        #print(self.nbody_system.field_points)
 
         self.cube = [(-1.0, 1.0, 1.0), (1.0, 1.0, 1.0), (1.0, -1.0, 1.0), (-1.0, -1.0, 1.0), (-1.0, 1.0, -1.0), (1.0, 1.0, -1.0), (1.0, -1.0, -1.0), (-1.0, -1.0, -1.0)]
 
@@ -65,15 +67,20 @@ class App:
         self.paused = False
         self.clear = True
         self.show_cube = True
-        
-        self.cols = [(255, 196, 128), (128, 255, 196), (196, 128, 255)]
+        self.light = False
+        self.light_att = 16
+        self.glare = 196
+
+        self.cols = [(255, 196, 128), (128, 255, 196), (196, 128, 255), (255, 128, 196), (128, 196, 255), (196, 255, 128)]
         while len(self.cols) < self.nb_body:
             self.cols.append((random.randint(64, 255), random.randint(128, 255), random.randint(196, 255)))
 
         # camera
         self.cam_speed = 0.01
-        self.cam_fov = 45.
-        self.camera = Camera(self, fov=self.cam_fov, near=0.01, far=100., position=(0, 0, 4), speed=self.cam_speed, sensivity=0.07)
+        self.cam_fov = 48.
+        self.orbital_mode = orbital_mode
+        self.orbital_speed = 0.1
+        self.camera = Camera(self, orbital_mode=self.orbital_mode, orbital_speed=self.orbital_speed, fov=self.cam_fov, near=0.01, far=100., position=(0.0, 0.5, 4), speed=self.cam_speed, sensivity=0.07)
 
         pygame.event.set_grab(False)
         pygame.mouse.set_visible(True)
@@ -152,7 +159,11 @@ class App:
             fps = f"FPS: {self.fps.get_fps():3.0f} ({gl_mode})"
             cam_pos = f"CamPos: {int(self.camera.position.x)}, {int(self.camera.position.y)}, {int(self.camera.position.z)}"
             ft = "frames=%s" % str(self.frames)
-            pygame.display.set_caption(fps + " | " + cam_pos + " | " + ft)
+            if self.use_taichi_for_matrix:
+                matrix = "gpu matrix" 
+            else:
+                matrix = "cpu matrix" 
+            pygame.display.set_caption(fps + " | " + matrix + " | " + cam_pos + " | " + ft)
 
             self.lastTime = self.currentTime
 
@@ -162,39 +173,78 @@ class App:
         imgui.new_frame()
         imgui.begin("Options", True)
 
-        _, self.show_cube = imgui.checkbox("Show Cube", self.show_cube)
         _, self.paused = imgui.checkbox("Pause (P key)", self.paused)
         _, self.clear = imgui.checkbox("Clear (C key)", self.clear)
+        _, self.show_cube = imgui.checkbox("Show Cube", self.show_cube)
+
+        _, self.light = imgui.checkbox("Light", self.light)
+        _, self.light_att  = imgui.slider_int("Light att", self.light_att, 1, 64)
+        _, self.glare  = imgui.slider_int("Glare", self.glare, 64, 255)
+
+        _, self.orbital_mode = imgui.checkbox("Orbital Mode", self.orbital_mode)
+        if _:
+            self.camera.orbital_mode = self.orbital_mode
+            if not self.orbital_mode:
+                self.camera.position = glm.vec3(0, 0, 3.5)
+        _, self.orbital_speed  = imgui.slider_float("Orbital Speed", self.orbital_speed, 0.001, 1.)
+        if _:
+            self.camera.orbital_speed = self.orbital_speed
 
         _, self.point_size  = imgui.slider_int("point size", self.point_size, 1, 8)
 
         _, self.trace_lenght  = imgui.slider_int("trace lenght", self.trace_lenght, 1, 3000)
-        self.trace_deque = collections.deque(self.trace_deque, maxlen=self.trace_lenght*3)
+        if _:
+            self.trace_deque = collections.deque(self.trace_deque, maxlen=self.trace_lenght*self.nb_body)
 
         _, self.p1_mass  = imgui.slider_float("P1 mass", self.p1_mass, 0.01, 100.)
-        self.nbody_system.bodies[0].mass = self.p1_mass
+        if _:
+            self.nbody_system.bodies[0].mass = self.p1_mass
 
         _, self.dt  = imgui.slider_float("dt", self.dt, 0.00005, 0.01, format="%.5f")
         _, self.eps = imgui.slider_float("eps", self.eps, 0.01, 0.5)
         _, self.cam_speed = imgui.slider_float("cam speed", self.cam_speed, 0.001, 1.0, format="%.3f")
         _, self.cam_fov = imgui.slider_float("cam fov", self.cam_fov, 1.0, 90.0)
-
-        self.camera.speed = self.cam_speed
-        self.camera.fov = self.cam_fov
+        if _:
+            self.camera.speed = self.cam_speed
+            self.camera.fov = self.cam_fov
 
         imgui.end()
 
-    def get_field(self, min=-1., max=1., ppl=100):
-        field_pts = []
-        for y in np.linspace(max, min, num=ppl):
-            for x in np.linspace(min, max, num=ppl):
-                field_pts.append((x,y, 0))
+    def draw_cube(self):
+        # cube
+        if self.show_cube:
 
-        #x = np.array(field_pts)
-        #print(x)
+            cube_points = []
+            for point in self.cube:
 
-        return field_pts
-    
+                x_ndc = point[0] # [-1, 1]
+                y_ndc = point[1] # [-1, 1]
+                z_ndc = point[2] # [-1, 1]
+
+                ndc_hmg_vec4 = glm.vec4(x_ndc, y_ndc, z_ndc, 1.0) # (pos, w) w = hmg coord for mat4x4 translation / projection ops
+                pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * ndc_hmg_vec4
+
+                x_proj = (self.screen_width/2) +  (pt_proj_vec4.x/pt_proj_vec4.z)*(self.screen_width/2)
+                y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.z)*(self.screen_height/2)
+                
+                cube_points.append( (int(x_proj), int(y_proj)) )
+
+            # render cube
+            V = 64
+            col=(V, V, V); B=(0, 0, V); R=(V, 0, 0) ; G = (0, V, 0)
+            pygame.draw.line(self.screen, col, cube_points[0], cube_points[1], width=1)
+            pygame.draw.line(self.screen, col, cube_points[1], cube_points[2], width=1)
+            pygame.draw.line(self.screen, R,   cube_points[2], cube_points[3], width=1)
+            pygame.draw.line(self.screen, G,   cube_points[3], cube_points[0], width=1)
+            pygame.draw.line(self.screen, col, cube_points[4], cube_points[5], width=1)
+            pygame.draw.line(self.screen, col, cube_points[5], cube_points[6], width=1)
+            pygame.draw.line(self.screen, col, cube_points[6], cube_points[7], width=1)
+            pygame.draw.line(self.screen, col, cube_points[7], cube_points[4], width=1)
+            pygame.draw.line(self.screen, col, cube_points[0], cube_points[4], width=1)
+            pygame.draw.line(self.screen, col, cube_points[1], cube_points[5], width=1)
+            pygame.draw.line(self.screen, col, cube_points[2], cube_points[6], width=1)
+            pygame.draw.line(self.screen, B,   cube_points[3], cube_points[7], width=1)
+
     def run(self):
 
         while True:
@@ -279,7 +329,8 @@ class App:
 
             # calc particules positions
             if not self.paused:
-                self.nbody_system.update(self.dt, self.eps)
+                self.nbody_system.update_O2(self.dt, self.eps)
+                #self.nbody_system.update(self.dt, self.eps)
 
             # camera motion
             self.camera.update(self.mouse_dx, self.mouse_dy, self.forward, self.backward, self.left, self.right, self.up, self.down)
@@ -297,104 +348,62 @@ class App:
             self.m_model = glm.rotate(self.m_model, self.obj_rot.x, glm.vec3(1, 0, 0))
             self.m_model = glm.scale (self.m_model, self.obj_scale)
 
-            # cube
-            if self.show_cube:
+            self.draw_cube()
 
-                cube_points = []
-                for point in self.cube:
+            # --- calc particules world positions
 
-                    x_ndc = point[0] # [-1, 1]
-                    y_ndc = point[1] # [-1, 1]
-                    z_ndc = point[2] # [-1, 1]
+            # matrix multiplication on the GPU side vs CPU side
 
-                    ndc_hmg_vec4 = glm.vec4(x_ndc, y_ndc, z_ndc, 1.0) # (pos, w) w = hmg coord for mat4x4 translation / projection ops
-                    pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * ndc_hmg_vec4
+            if not self.paused:
+                for i in range(self.nb_body):
+                    self.trace_deque.append((self.nbody_system.bodies[i].pos.x, self.nbody_system.bodies[i].pos.y, self.nbody_system.bodies[i].pos.z))
 
-                    x_proj = (self.screen_width/2) +  (pt_proj_vec4.x/pt_proj_vec4.z)*(self.screen_width/2)
-                    y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.z)*(self.screen_height/2)
+            self.trace_proj = []
+
+            if not self.use_taichi_for_matrix:
+                for b in self.trace_deque:
                     
-                    cube_points.append( (int(x_proj), int(y_proj)) )
-
-                # render cube
-                col = (96, 96, 96)
-                pygame.draw.line(self.screen, col, cube_points[0], cube_points[1], width=1)
-                pygame.draw.line(self.screen, col, cube_points[1], cube_points[2], width=1)
-                pygame.draw.line(self.screen, col, cube_points[2], cube_points[3], width=1)
-                pygame.draw.line(self.screen, col, cube_points[3], cube_points[0], width=1)
-                pygame.draw.line(self.screen, col, cube_points[4], cube_points[5], width=1)
-                pygame.draw.line(self.screen, col, cube_points[5], cube_points[6], width=1)
-                pygame.draw.line(self.screen, col, cube_points[6], cube_points[7], width=1)
-                pygame.draw.line(self.screen, col, cube_points[7], cube_points[4], width=1)
-                pygame.draw.line(self.screen, col, cube_points[0], cube_points[4], width=1)
-                pygame.draw.line(self.screen, col, cube_points[1], cube_points[5], width=1)
-                pygame.draw.line(self.screen, col, cube_points[2], cube_points[6], width=1)
-                pygame.draw.line(self.screen, col, cube_points[3], cube_points[7], width=1)
-
-            # particules world positions
-            for i in range(self.nb_body):
+                    x_ndc = b[0]
+                    y_ndc = b[1]
+                    z_ndc = b[2]
                 
-                x_ndc = self.nbody_system.bodies[i].pos.x
-                y_ndc = self.nbody_system.bodies[i].pos.y
-                z_ndc = self.nbody_system.bodies[i].pos.z
-            
-                ndc_hmg_vec4 = glm.vec4(x_ndc, y_ndc, z_ndc, 1.0)
-                pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * ndc_hmg_vec4
+                    pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * glm.vec4(x_ndc, y_ndc, z_ndc, 1.0)
 
-                x_proj = (self.screen_width/2) + (pt_proj_vec4.x/pt_proj_vec4.w)*(self.screen_width/2)
-                y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.w)*(self.screen_height/2)
+                    x_proj = (self.screen_width/2) + (pt_proj_vec4.x/pt_proj_vec4.w)*(self.screen_width/2)
+                    y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.w)*(self.screen_height/2)
 
-                self.trace_deque.append( (int(x_proj), int(y_proj)) )
+                    self.trace_proj.append( (x_proj, y_proj, pt_proj_vec4.w) )
+
+            # tachi matrix ops
+            else:
+                #self.nbody_system.project_points_from_ti_bodies(self.camera.get_projection_matrix(), self.camera.get_view_matrix(), self.m_model)
+                self.nbody_system.project_points_from_deque(self.camera.get_projection_matrix(), self.camera.get_view_matrix(), self.m_model, np.array(self.trace_deque))
+
+                for i in range(len(self.trace_deque)):
+                    self.trace_proj.append(self.nbody_system.projected_points[i])
 
             # render particules
-            for i, body in enumerate(self.trace_deque):
+            for i, body in enumerate(self.trace_proj):
                 col = self.cols[i%self.nb_body]
 
-                v = ( (i/3) / (float(len(self.trace_deque))/3) ) * 196
+                v = ( (i/self.nb_body) / (float(len(self.trace_proj))/self.nb_body) ) * self.glare
+                if self.light:
+                    z = body[2]
+                    v -= z * self.light_att
+
                 #r = 255 - max(0, min(255, col[0] - v))
                 #g = 255 - max(0, min(255, col[1] - v))
                 #b = 255 - max(0, min(255, col[2] - v))
                 #col=(r, g, b)
                 col = tuple(map(lambda x: 255 - max(0, min(255, x - v)), col))
+                #if (i == len(self.trace_proj)-1) or (i == len(self.trace_proj)-self.nb_body) or (i == len(self.trace_proj)-(self.nb_body-1)*2) or \
+                #    (i == len(self.trace_proj)-(self.nb_body-1)*3):
 
-                pygame.draw.circle(self.screen, col, (body[0],  body[1]), self.point_size)
-
-            if 0:
-                f_points = []
-                for i in range(self.field_size*self.field_size):
-                    #x_ndc = self.nbody_system.field_points[i].pos.x
-                    #y_ndc = self.nbody_system.field_points[i].pos.y
-                    #z_ndc = self.nbody_system.field_points[i].pos.z
+                pt_size = self.point_size
+                #if i == (len(self.trace_proj)-1):
+                #    pt_size = self.point_size+2
                     
-                    x_ndc = self.field_points[i][0]
-                    y_ndc = self.field_points[i][1]
-                    z_ndc = self.field_points[i][2]
-
-                    col = []
-                    pmax = 5
-                    for i in range(self.nb_body):
-                        
-                        x_ndc_p = self.nbody_system.bodies[i].pos.x
-                        y_ndc_p = self.nbody_system.bodies[i].pos.y
-
-                        a = int(((math.pow((x_ndc_p - x_ndc), 2) + math.pow((y_ndc_p - y_ndc), 2) ) / pmax) * 255)
-                        #print(a)
-                        if a > 255:
-                            a = 255
-                        if a < 55:
-                            a = 55
-                        col.append(a)
-
-                    ndc_hmg_vec4 = glm.vec4(x_ndc, y_ndc, z_ndc, 1.0)
-                    pt_proj_vec4 = self.camera.get_projection_matrix() * self.camera.get_view_matrix() * self.m_model * ndc_hmg_vec4
-
-                    x_proj = (self.screen_width/2) + (pt_proj_vec4.x/pt_proj_vec4.z)*(self.screen_width/2)
-                    y_proj = (self.screen_height/2) - (pt_proj_vec4.y/pt_proj_vec4.z)*(self.screen_height/2)
-
-                    f_points.append( (int(x_proj), int(y_proj), col) )
-
-                # render particules
-                for i, b in enumerate(f_points):
-                    pygame.draw.circle(self.screen, b[2], (b[0],  b[1]), 8)
+                pygame.draw.circle(self.screen, col, (int(body[0]),  int(body[1])), pt_size)
 
             # opengl mode => write tour 2D pygame surface into the texture (which will be be rendered in a quad by the fragment shader)
             if self.use_opengl:
@@ -423,9 +432,13 @@ class App:
             self.frames += 1
 
 # -----------------------------------------------------------------------------------------------------------
+# https://github.com/bsavery/ray-tracing-one-weekend-taichi/blob/main/main.py
+# https://github.com/taichi-dev/taichi_dem/blob/main/dem.py
+
 # python3 main.py --arch=cpu --body=3 --fps=-1
 # python3 main.py --arch=gpu --body=10000 --fps=60
-# python3 main.py --arch=cpu --body=3 --fps=-1 -rv="h264" -vfps=240
+# python3 main.py --arch=cpu --body=5 --fps=-1 -rv="h264" -vfps=240
+# python3 main.py --arch=cpu --body=3 --fps=-1 -utfm # GPU matrix
 
 def main():
 
@@ -441,9 +454,10 @@ def main():
 
     parser.add_argument('-a', '--arch', help='Taichi backend', default="cpu", action="store")
     parser.add_argument('-f', '--fps', help='Max FPS, -1 for unlimited', default=-1, type=int)
-    parser.add_argument('-b', '--body', help='NB Body', default=3, type=int)
+    parser.add_argument('-b', '--body', help='NB Body', default=5, type=int)
     parser.add_argument('-rv', '--record_video', help='', default="", type=str)
     parser.add_argument('-vfps', '--video_fps', help='', default=60, type=int)
+    parser.add_argument('-utfm', '--use_taichi_for_matrix', help='', action="store_true")
 
     result = parser.parse_args()
     args = dict(result._get_kwargs())
@@ -461,8 +475,8 @@ def main():
         ti.init(ti.vulkan)
 
     # App
-    app = App(screen_width=1280, screen_height=800, use_opengl=1, record_video=args["record_video"], video_fps=args["video_fps"], max_fps=args["fps"], 
-              nb_body=args["body"], dt=0.002, eps=0.1)
+    app = App(screen_width=1280, screen_height=800, use_opengl=1, orbital_mode=1, record_video=args["record_video"], video_fps=args["video_fps"], max_fps=args["fps"], 
+              nb_body=args["body"], use_taichi_for_matrix=args["use_taichi_for_matrix"], dt=0.0009, eps=0.05)
     app.run()
 
 if __name__ == "__main__":
