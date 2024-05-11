@@ -49,6 +49,7 @@ class App:
         self.p1_mass = 1.0
         self.trace_lenght = 1000
         self.point_size = 1
+        self.fake_g = 2
 
         self.trace_deque = collections.deque(maxlen=self.trace_lenght*self.nb_body)
         self.trace_proj = []
@@ -200,7 +201,9 @@ class App:
         if _:
             self.nbody_system.bodies[0].mass = self.p1_mass
 
-        _, self.dt  = imgui.slider_float("dt", self.dt, 0.00005, 0.01, format="%.5f")
+        _, self.dt = imgui.slider_float("dt", self.dt, 0.00005, 0.01, format="%.5f")
+        _, self.fake_g = imgui.slider_float("G", self.fake_g, 0.1, 128, format="%.1f")
+
         _, self.eps = imgui.slider_float("eps", self.eps, 0.01, 0.5)
         _, self.cam_speed = imgui.slider_float("cam speed", self.cam_speed, 0.001, 1.0, format="%.3f")
         _, self.cam_fov = imgui.slider_float("cam fov", self.cam_fov, 1.0, 90.0)
@@ -329,8 +332,8 @@ class App:
 
             # calc particules positions
             if not self.paused:
-                self.nbody_system.update_O2(self.dt, self.eps)
-                #self.nbody_system.update(self.dt, self.eps)
+                self.nbody_system.update_O2(self.dt, self.eps, self.fake_g)
+                #self.nbody_system.update(self.dt, self.eps, self.fake_g)
 
             # camera motion
             self.camera.update(self.mouse_dx, self.mouse_dy, self.forward, self.backward, self.left, self.right, self.up, self.down)

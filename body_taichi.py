@@ -148,7 +148,7 @@ class NBodySystem:
 
     # somehow the optimized version is slower
     @ti.kernel
-    def update(self, dt: ti.f32, eps: ti.f32):
+    def update(self, dt: ti.f32, eps: ti.f32, fake_g: ti.f32):
         """ Sym opt: calc i=>j and j=>i at the same time """
 
         for i in range(self.nb_body):
@@ -164,7 +164,7 @@ class NBodySystem:
                     DR2 = ti.math.dot(DR, DR)
                     DR2 += eps2
 
-                    PHI = DR / (ti.sqrt(DR2) * DR2)
+                    PHI = fake_g * DR / (ti.sqrt(DR2) * DR2)
                     self.bodies[i].acc += self.bodies[j].mass * PHI            
                     self.bodies[j].acc -= self.bodies[i].mass * PHI      
 
@@ -173,7 +173,7 @@ class NBodySystem:
             self.bodies[i].acc = [0.0, 0.0, 0.0]  
 
     @ti.kernel
-    def update_O2(self, dt: ti.f32, eps: ti.f32):
+    def update_O2(self, dt: ti.f32, eps: ti.f32, fake_g: ti.f32):
         """ O2 loop, no opt """
 
         for i in range(self.nb_body):
@@ -199,7 +199,7 @@ class NBodySystem:
                     DR2 = ti.math.dot(DR, DR)
                     DR2 += eps2
 
-                    PHI = self.bodies[j].mass / (ti.sqrt(DR2) * DR2)
+                    PHI = fake_g * self.bodies[j].mass / (ti.sqrt(DR2) * DR2)
 
                     self.bodies[i].acc += DR * PHI
 
