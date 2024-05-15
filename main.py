@@ -49,6 +49,7 @@ class App:
         self.p1_mass = 1.0
         self.trace_lenght = 1000
         self.point_size = 1
+        self.head_size = self.point_size
         self.fake_g = 2
 
         self.trace_deque = collections.deque(maxlen=self.trace_lenght*self.nb_body)
@@ -69,7 +70,7 @@ class App:
         self.clear = True
         self.show_cube = True
         self.light = False
-        self.light_att = 16
+        self.light_att = 8
         self.glare = 196
 
         self.cols = [(255, 196, 128), (128, 255, 196), (196, 128, 255), (255, 128, 196), (128, 196, 255), (196, 255, 128)]
@@ -191,6 +192,7 @@ class App:
         if _:
             self.camera.orbital_speed = self.orbital_speed
 
+        _, self.head_size  = imgui.slider_int("Head Size", self.head_size, 1, 8)
         _, self.point_size  = imgui.slider_int("point size", self.point_size, 1, 8)
 
         _, self.trace_lenght  = imgui.slider_int("trace lenght", self.trace_lenght, 1, 3000)
@@ -402,10 +404,14 @@ class App:
                 #if (i == len(self.trace_proj)-1) or (i == len(self.trace_proj)-self.nb_body) or (i == len(self.trace_proj)-(self.nb_body-1)*2) or \
                 #    (i == len(self.trace_proj)-(self.nb_body-1)*3):
 
+                # head size
                 pt_size = self.point_size
-                #if i == (len(self.trace_proj)-1):
-                #    pt_size = self.point_size+2
-                    
+                if self.head_size != self.point_size:
+                    if i > (len(self.trace_proj)-1-self.nb_body):
+                        pt_size = self.head_size
+
+                        col = tuple(map(lambda x: min(255, x + 32), col))
+
                 pygame.draw.circle(self.screen, col, (int(body[0]),  int(body[1])), pt_size)
 
             # opengl mode => write tour 2D pygame surface into the texture (which will be be rendered in a quad by the fragment shader)
